@@ -1,57 +1,6 @@
-// MPU-6050 Accelerometer + Gyro
-// -----------------------------
-//
-// By arduino.cc user "Krodal".
-//
-// June 2012
-//      first version
-// July 2013 
-//      The 'int' in the union for the x,y,z
-//      changed into int16_t to be compatible
-//      with Arduino Due.
-//
-// Open Source / Public Domain
-//
-// Using Arduino 1.0.1
-// It will not work with an older version, 
-// since Wire.endTransmission() uses a parameter 
-// to hold or release the I2C bus.
-//
-// Documentation:
-// - The InvenSense documents:
-//   - "MPU-6000 and MPU-6050 Product Specification",
-//     PS-MPU-6000A.pdf
-//   - "MPU-6000 and MPU-6050 Register Map and Descriptions",
-//     RM-MPU-6000A.pdf or RS-MPU-6000A.pdf
-//   - "MPU-6000/MPU-6050 9-Axis Evaluation Board User Guide"
-//     AN-MPU-6000EVB.pdf
-// 
-// The accuracy is 16-bits.
-//
-// Temperature sensor from -40 to +85 degrees Celsius
-//   340 per degrees, -512 at 35 degrees.
-//
-// At power-up, all registers are zero, except these two:
-//      Register 0x6B (PWR_MGMT_2) = 0x40  (I read zero).
-//      Register 0x75 (WHO_AM_I)   = 0x68.
-// 
-
 #include <Wire.h>
 #include <Servo.h>
 
-// The name of the sensor is "MPU-6050".
-// For program code, I omit the '-', 
-// therefor I use the name "MPU6050....".
-
-
-// Register names according to the datasheet.
-// According to the InvenSense document 
-// "MPU-6000 and MPU-6050 Register Map 
-// and Descriptions Revision 3.2", there are no registers
-// at 0x02 ... 0x18, but according other information 
-// the registers in that unknown area are for gain 
-// and offsets.
-// 
 #define MPU6050_AUX_VDDIO          0x01   // R/W
 #define MPU6050_SMPLRT_DIV         0x19   // R/W
 #define MPU6050_CONFIG             0x1A   // R/W
@@ -306,8 +255,7 @@
 
 // Combined definitions for the I2C_MST_CLK
 #define MPU6050_I2C_MST_CLK_0 (0)
-#define MPU6050_I2C_MST_CLK_1  (bit(MPU6050_I2C_MST_CLK0)
-
+#define MPU6050_I2C_MST_CLK_1  (bit(MPU6050_I2C_MST_CLK0))
 #define MPU6050_I2C_MST_CLK_2  (bit(MPU6050_I2C_MST_CLK1))
 #define MPU6050_I2C_MST_CLK_3  (bit(MPU6050_I2C_MST_CLK1)|bit(MPU6050_I2C_MST_CLK0))
 #define MPU6050_I2C_MST_CLK_4  (bit(MPU6050_I2C_MST_CLK2))
@@ -668,6 +616,12 @@ typedef union accel_t_gyro_union
   } value;
 };
 
+const int sensorPin = 0;
+const int dishCountPin = 7;
+const int servoPin = 9;
+const int connection = 12;
+const int wavePin = 8;
+const int outPin = 13;
 
 Servo myservo;  // create servo object to control a servo 
 int old_gyro_x;
@@ -676,263 +630,173 @@ int old_gyro_z;
 int dishCount = 0;
 int d = 1000;
 
-
-const int ledPin = 2;
-const int buzzerPin = 9; 
-const int connection = 12;
-const int wavePin = 4;
-
-// buzzer song parameters
-const int songLength = 18;
-char notes[] = "cdfda ag cdfdg gf ";
-int beats[] = {1,1,1,1,1,1,4,4,2,1,1,1,1,1,1,4,4,2};
-int tempo = 150;
-
+//senseType can be 0: for first ON state, 1: OFF state, 2: second ON state; darkLevel if lightLevel at which sensor should sense darkness
+int lightLevel = 0, initLevel, high, low, darkLevel, senseType = 0, time = 0, time2 = 0; 
+  
 void setup()
-{      
-  int error;
-  uint8_t c;
+{
 
-  pinMode(wavePin, INPUT);
-  pinMode(ledPin, OUTPUT); 
-  pinMode(buzzerPin, OUTPUT);
-  pinMode(connection, OUTPUT);
+// attaches the servo on pin 8 to the servo object 
+  myservo.attach(servoPin);  
   
   Serial.begin(9600);
-  Wire.begin();
+  
+  pinMode(connection, INPUT);
+  pinMode(dishCountPin, OUTPUT);
+  pinMode(wavePin, OUTPUT);
+  pinMode(servoPin, OUTPUT);
+  pinMode(outPin, OUTPUT);
+  digitalWrite(servoPin, LOW);
+  digitalWrite(connection, LOW);
+  
+  initLevel = analogRead(sensorPin);
+  
+  high = initLevel-50;
+  low = initLevel+50;
 
-  error = MPU6050_read (MPU6050_WHO_AM_I, &c, 1);
-  error = MPU6050_read (MPU6050_PWR_MGMT_2, &c, 1);
-  MPU6050_write_reg (MPU6050_PWR_MGMT_1, 0);
+  initLevel = map(initLevel, high, low, 0, 255);
+  initLevel = constrain(initLevel, 0, 255);
+  
+  
+  Serial.print("initLevel: ");
+  Serial.println(initLevel);
+  Serial.print("\n");
+  
+  
 }
+
 
 void loop()
-{
+{ 
+  time = millis(); // time since program started
   
-  int error;
-  double dT;
-  accel_t_gyro_union accel_t_gyro;
-
-  error = MPU6050_read (MPU6050_ACCEL_XOUT_H, (uint8_t *) &accel_t_gyro, sizeof(accel_t_gyro));
-
-  uint8_t swap;
-  #define SWAP(x,y) swap = x; x = y; y = swap
-
-  SWAP (accel_t_gyro.reg.x_accel_h, accel_t_gyro.reg.x_accel_l);
-  SWAP (accel_t_gyro.reg.y_accel_h, accel_t_gyro.reg.y_accel_l);
-  SWAP (accel_t_gyro.reg.z_accel_h, accel_t_gyro.reg.z_accel_l);
-  SWAP (accel_t_gyro.reg.t_h, accel_t_gyro.reg.t_l);
-  SWAP (accel_t_gyro.reg.x_gyro_h, accel_t_gyro.reg.x_gyro_l);
-  SWAP (accel_t_gyro.reg.y_gyro_h, accel_t_gyro.reg.y_gyro_l);
-  SWAP (accel_t_gyro.reg.z_gyro_h, accel_t_gyro.reg.z_gyro_l);
-
-
-  // Print the raw acceleration values
-/*
-  Serial.print(F("accel x,y,z: "));
-  Serial.print(accel_t_gyro.value.x_accel, DEC);
-  Serial.print(F(", "));
-  Serial.print(accel_t_gyro.value.y_accel, DEC);
-  Serial.print(F(", "));
-  Serial.print(accel_t_gyro.value.z_accel, DEC);
-  Serial.println(F(""));
-*/
-  // The temperature sensor is -40 to +85 degrees Celsius.
-  // It is a signed integer.
-  // According to the datasheet: 
-  //   340 per degrees Celsius, -512 at 35 degrees.
-  // At 0 degrees: -512 - (340 * 35) = -12412
-/*
-  Serial.print(F("temperature: "));
-  dT = ( (double) accel_t_gyro.value.temperature + 12412.0) / 340.0;
-  Serial.print(dT, 3);
-  Serial.print(F(" degrees Celsius"));
-  Serial.println(F(""));
-*/
-
-  // Print the raw gyro values.
-/*
-  Serial.print(F("gyro x,y,z : "));
-  Serial.print(accel_t_gyro.value.x_gyro, DEC);
-  Serial.print(F(", "));
-  Serial.print(accel_t_gyro.value.y_gyro, DEC);
-  Serial.print(F(", "));
-  Serial.print(accel_t_gyro.value.z_gyro, DEC);
-  Serial.print(F(", "));
-  Serial.println(F(""));
-*/
-
-  // if motion detected, set connection pin to high
-  if ((abs((abs(old_gyro_x) - abs(accel_t_gyro.value.x_gyro))) > 100) ||
-      (abs((abs(old_gyro_y) - abs(accel_t_gyro.value.y_gyro))) > 100) ||
-      (abs((abs(old_gyro_z) - abs(accel_t_gyro.value.z_gyro))) > 100)) {
-        digitalWrite(connection, HIGH);
-        digitalWrite(13, HIGH);
-        dishCount++;
-  } else {
-        digitalWrite(connection, LOW);
-        digitalWrite(13, LOW);
-  }
-
-  if (digitalRead(wavePin) == HIGH) {    
-   // digitalWrite(ledPin, HIGH);
-   // delay(1000);
-   // digitalWrite(ledPin, LOW);
-    Serial.print("wavePin high?");
-    motorOnThenOff();
+  if (digitalRead(connection) == HIGH) {
     
-  }
-  
-  // Update accelerometer values
-  old_gyro_x = accel_t_gyro.value.x_gyro;
-  old_gyro_y = accel_t_gyro.value.y_gyro;
-  old_gyro_z = accel_t_gyro.value.z_gyro;
-
-}
-
-void motorOnThenOff()
-{
-  int onTime = 1000;  // milliseconds to turn the motor on
-
-  digitalWrite(buzzerPin, HIGH); // turn the motor on (full speed)
-  delay(onTime);                // delay for onTime milliseconds
-  digitalWrite(buzzerPin, LOW);  // turn the motor off
-}
-
-
-void playSong()
-{
-    int i, duration;
-  
-  for (i = 0; i < songLength; i++) // step through the song arrays
-  {
-    duration = beats[i] * tempo;  // length of note/rest in ms
+    Serial.print("connection?");
     
-    if (notes[i] == ' ')          // is this a rest? 
-    {
-      delay(duration);            // then pause for a moment
+      myservo.write(90);
+      delay(750);
+      myservo.write(0);
+      delay(750);
+      dishCount++;      
     }
-    else                          // otherwise, play the note
-    {
-      tone(buzzerPin, frequency(notes[i]), duration);
-      delay(duration);            // wait for tone to finish
-    }
-    delay(tempo/10);              // brief pause between notes
+
+  lightLevel = analogRead(sensorPin);
+  manualTune();  // manually change the range from light to dark
+  
+  
+  Serial.write("lightLevel: ");
+  Serial.println(lightLevel);
+  Serial.write("\n");
+  
+
+  if ((lightLevel == darkLevel) && (senseType == 0)) { //sensing light to dark
+      senseType = 1; 
+      time2 = time;
+
+  } else if ((lightLevel > darkLevel) && (senseType == 1)) { //sensing dark to light
+      if ((time-time2) > 2500) { // if darkness lasts more than 2 seconds, not recognized as hand gesture
+        senseType = 0;    
+      } else {
+        senseType = 2;
+      }      
+  
+  }
+  
+  if (senseType == 2) { // checking whether hand signal occurred     
+      digitalWrite(wavePin, HIGH);
+      digitalWrite(outPin, HIGH);
+      delay(2000);
+      digitalWrite(wavePin, LOW);
+      digitalWrite(outPin, LOW);
+      senseType = 0;        
+      }
+  
+  /*
+  Serial.write("senseType: ");
+  Serial.println(senseType);
+  Serial.write("\n");
+  */
+  
+  // Increase LED flicker rate when amount of dishes washed is high
+  if (dishCount > 0 && dishCount < 19) {
+    d = 1000 - (dishCount * 50);
+  } else if (dishCount >= 19) {
+    d = 50; 
+  }
+  if (d < 1000) {
+    digitalWrite(dishCountPin, HIGH);   
+    delay(d);              
+    digitalWrite(dishCountPin, LOW);   
+    delay(d); 
   }
   
 }
 
-int frequency(char note) 
-{
-  int i;
-  const int numNotes = 8;  // number of notes we're storing
-  char names[] = { 'c', 'd', 'e', 'f', 'g', 'a', 'b', 'C' };
-  int frequencies[] = {262, 294, 330, 349, 392, 440, 494, 523};
 
-  for (i = 0; i < numNotes; i++)  // Step through the notes
+void manualTune()
+{
+  // As we mentioned above, the light-sensing circuit we built
+  // won't have a range all the way from 0 to 1023. It will likely
+  // be more like 300 (dark) to 800 (light). If you run this sketch
+  // as-is, the LED won't fully turn off, even in the dark.
+  
+  // You can accommodate the reduced range by manually 
+  // tweaking the "from" range numbers in the map() function.
+  // Here we're using the full range of 0 to 1023.
+  // Try manually changing this to a smaller range (300 to 800
+  // is a good guess), and try it out again. If the LED doesn't
+  // go completely out, make the low number larger. If the LED
+  // is always too bright, make the high number smaller.
+
+  // Remember you're JUST changing the 0, 1023 in the line below!
+
+  lightLevel = map(lightLevel, high, low, 0, 255);
+  lightLevel = constrain(lightLevel, 0, 255);
+
+} 
+
+
+void autoTune()
+{
+  // As we mentioned above, the light-sensing circuit we built
+  // won't have a range all the way from 0 to 1023. It will likely
+  // be more like 300 (dark) to 800 (light).
+  
+  // In the manualTune() function above, you need to repeatedly
+  // change the values and try the program again until it works.
+  // But why should you have to do that work? You've got a
+  // computer in your hands that can figure things out for itself!
+
+  // In this function, the Arduino will keep track of the highest
+  // and lowest values that we're reading from analogRead().
+
+  // If you look at the top of the sketch, you'll see that we've
+  // initialized "low" to be 1023. We'll save anything we read
+  // that's lower than that:
+  
+  if (lightLevel < low)
   {
-    if (names[i] == note)         // Is this the one?
-    {
-      return(frequencies[i]);     // Yes! Return the frequency
-    }
+    low = lightLevel;
   }
-  return(0);  
-}
 
-
-// --------------------------------------------------------
-// MPU6050_read
-//
-// This is a common function to read multiple bytes 
-// from an I2C device.
-//
-// It uses the boolean parameter for Wire.endTransMission()
-// to be able to hold or release the I2C-bus. 
-// This is implemented in Arduino 1.0.1.
-//
-// Only this function is used to read. 
-// There is no function for a single byte.
-//
-int MPU6050_read(int start, uint8_t *buffer, int size)
-{
-  int i, n, error;
-
-  Wire.beginTransmission(MPU6050_I2C_ADDRESS);
-  n = Wire.write(start);
-  if (n != 1)
-    return (-10);
-
-  n = Wire.endTransmission(false);    // hold the I2C-bus
-  if (n != 0)
-    return (n);
-
-  // Third parameter is true: relase I2C-bus after data is read.
-  Wire.requestFrom(MPU6050_I2C_ADDRESS, size, true);
-  i = 0;
-  while(Wire.available() && i<size)
+  // We also initialized "high" to be 0. We'll save anything
+  // we read that's higher than that:
+  
+  if (lightLevel > high)
   {
-    buffer[i++]=Wire.read();
+    high = lightLevel;
   }
-  if ( i != size)
-    return (-11);
-
-  return (0);  // return : no error
-}
-
-
-// --------------------------------------------------------
-// MPU6050_write
-//
-// This is a common function to write multiple bytes to an I2C device.
-//
-// If only a single register is written,
-// use the function MPU_6050_write_reg().
-//
-// Parameters:
-//   start : Start address, use a define for the register
-//   pData : A pointer to the data to write.
-//   size  : The number of bytes to write.
-//
-// If only a single register is written, a pointer
-// to the data has to be used, and the size is
-// a single byte:
-//   int data = 0;        // the data to write
-//   MPU6050_write (MPU6050_PWR_MGMT_1, &c, 1);
-//
-int MPU6050_write(int start, const uint8_t *pData, int size)
-{
-  int n, error;
-
-  Wire.beginTransmission(MPU6050_I2C_ADDRESS);
-  n = Wire.write(start);        // write the start address
-  if (n != 1)
-    return (-20);
-
-  n = Wire.write(pData, size);  // write data bytes
-  if (n != size)
-    return (-21);
-
-  error = Wire.endTransmission(true); // release the I2C-bus
-  if (error != 0)
-    return (error);
-
-  return (0);         // return : no error
-}
-
-// --------------------------------------------------------
-// MPU6050_write_reg
-//
-// An extra function to write a single register.
-// It is just a wrapper around the MPU_6050_write()
-// function, and it is only a convenient function
-// to make it easier to write a single register.
-//
-int MPU6050_write_reg(int reg, uint8_t data)
-{
-  int error;
-
-  error = MPU6050_write(reg, &data, 1);
-
-  return (error);
+  
+  // Once we have the highest and lowest values, we can stick them
+  // directly into the map() function. No manual tweaking needed!
+  
+  // One trick we'll do is to add a small offset to low and high,
+  // to ensure that the LED is fully-off and fully-on at the limits
+  // (otherwise it might flicker a little bit).
+  
+  lightLevel = map(lightLevel, low+30, high-30, 0, 255);
+  lightLevel = constrain(lightLevel, 0, 255);
+  
 }
 
